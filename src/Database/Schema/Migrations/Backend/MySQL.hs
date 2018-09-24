@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Database.Schema.Migrations.Backend.MySQL
      ( connectMySQL
      , mysqlBackend) where
@@ -11,6 +12,8 @@ import Database.Schema.Migrations.Migration
 import Data.List.Split (wordsBy)
 import Data.Char (isSpace, toLower)
 import Data.Time.Clock (getCurrentTime)
+import Data.Text (Text)
+import Data.String.Conversions (cs, (<>))
 import Data.String (fromString)
 import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Database.MySQL.Base as Base
@@ -46,8 +49,8 @@ mysqlBackend conn =
   Backend {isBootstrapped =
              fmap ((Just migrationTableName ==) . listToMaybe . fmap fromOnly)
                   (query conn
-                         (fromString "SELECT table_name FROM information_schema.tables WHERE table_name = ? AND table_schema = database()")
-                         (Only migrationTableName) :: IO [Only String])
+                         ("SELECT table_name FROM information_schema.tables WHERE table_name = ? AND table_schema = database()")
+                         (Only migrationTableName) :: IO [Only Text])
           ,getBootstrapMigration =
              do ts <- getCurrentTime
                 return ((newMigration rootMigrationName) {mApply = createSql
@@ -58,12 +61,12 @@ mysqlBackend conn =
                                                          ,mTimestamp = Just ts})
           ,applyMigration =
              \m ->
-               do execute_ conn (fromString (mApply m))
+               do _ <- execute_ conn (fromString . cs $ mApply m)
                   discardResults conn
-                  execute conn
-                          (fromString
-                             ("INSERT INTO " ++
-                              migrationTableName ++
+                  _ <- execute conn
+                          (fromString . cs $
+                             ("INSERT INTO " <>
+                              migrationTableName <>
                               " (migration_id) VALUES (?)"))
                           (Only (mId m))
                   return ()
@@ -72,22 +75,22 @@ mysqlBackend conn =
                do case mRevert m of
                     Nothing -> return ()
                     Just sql ->
-                      do execute_ conn (fromString sql)
+                      do _ <- execute_ conn (fromString . cs $ sql)
                          return ()
                   discardResults conn
                   -- Remove migration from installed_migrations in either case.
-                  execute
+                  _ <- execute
                     conn
-                    (fromString
-                       ("DELETE FROM " ++
-                        migrationTableName ++ " WHERE migration_id = ?"))
+                    (fromString . cs $
+                       ("DELETE FROM " <>
+                        migrationTableName <> " WHERE migration_id = ?"))
                     (Only (mId m))
                   return ()
           ,getMigrations =
              do results <-
                   query_ conn
-                         (fromString
-                            ("SELECT migration_id FROM " ++ migrationTableName))
+                         (fromString . cs $
+                            ("SELECT migration_id FROM " <> migrationTableName))
                 return (map fromOnly results)
           ,commitBackend = commit conn
           ,rollbackBackend = rollback conn
@@ -98,11 +101,11 @@ discardResults conn =
   do more <- Base.nextResult conn
      when more (discardResults conn)
 
-migrationTableName :: String
+migrationTableName :: Text
 migrationTableName = "installed_migrations"
 
-createSql :: String
-createSql = "CREATE TABLE " ++ migrationTableName ++ " (migration_id TEXT)"
+createSql :: Text
+createSql = "CREATE TABLE " <> migrationTableName <> " (migration_id TEXT)"
 
-revertSql :: String
-revertSql = "DROP TABLE " ++ migrationTableName
+revertSql :: Text
+revertSql = "DROP TABLE " <> migrationTableName
